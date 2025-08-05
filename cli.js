@@ -10,9 +10,7 @@ const program = new Command();
 
 program
   .name("file-organizer")
-  .description(
-    "Smart file organization with intelligent categorization and archive extraction"
-  )
+  .description("🎨 Design File Organizer - Organize your design files into folders by type (jpg, png, eps, pdf, etc.)")
   .version("2.0.0");
 
 program
@@ -31,6 +29,39 @@ program
   .option("-q, --quiet", "suppress info messages")
   .option("--config", "show configuration settings")
   .option("--presets", "list available presets")
+  .addHelpText('after', `
+Examples:
+  $ node cli.js organized_files ./my-designs
+    Organize files from ./my-designs into organized_files/
+
+  $ node cli.js sorted "C:\\Downloads\\Design Bundle"
+    Organize files from Windows path into sorted/
+
+  $ node cli.js output ./folder1 ./folder2 ./folder3
+    Organize multiple folders into output/
+
+  $ node cli.js organized_files ./designs --dry-run
+    Preview what would be organized without making changes
+
+  $ node cli.js sorted ./designs --verbose
+    Show detailed progress during organization
+
+Supported File Types:
+  📁 Images: JPG, JPEG, PNG, SVG
+  📁 Design: EPS, AI, PSD, CDR
+  📁 Documents: PDF
+  📁 Raw: CRW
+  📁 Archives: ZIP, RAR (extracted automatically)
+
+Features:
+  ✅ Extracts ZIP and RAR files automatically
+  ✅ Organizes extracted contents by file type
+  ✅ Handles file naming conflicts
+  ✅ Creates folders only for file types found
+  ✅ Preserves original files
+
+💡 Tip: For easier use, try: node organize.js (interactive mode)
+`)
   .action(async (outputDir, inputDirs, options) => {
     try {
       const configManager = new ConfigManager();

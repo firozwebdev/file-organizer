@@ -4,17 +4,33 @@
   "description": "A Node.js tool to organize files by extension and extract archives automatically",
   "main": "index.js",
   "bin": {
-    "file-organizer": "./cli.js"
+    "file-organizer": "./organize.js"
   },
   "scripts": {
-    "start": "node cli.js",
+    "start": "node organize.js",
+    "cli": "node cli.js",
     "interactive": "node interactiveCli.js",
     "test": "node test.js",
     "demo": "node demo.js",
     "config": "node cli.js --config",
     "presets": "node cli.js --presets",
     "test-smart": "node cli.js ./test_files --dry-run -v",
-    "test-preset": "node cli.js ./test_files -p media-focused --dry-run"
+    "test-preset": "node cli.js ./test_files -p media-focused --dry-run",
+    "build": "pkg . --out-path dist",
+    "build-win": "pkg . --targets node18-win-x64 --out-path dist",
+    "build-all": "pkg . --targets node18-win-x64,node18-macos-x64,node18-linux-x64 --out-path dist"
+  },
+  "pkg": {
+    "targets": [
+      "node18-win-x64",
+      "node18-macos-x64",
+      "node18-linux-x64"
+    ],
+    "outputPath": "dist",
+    "assets": [
+      "*.md",
+      "*.bat"
+    ]
   },
   "keywords": [
     "file-organizer",
