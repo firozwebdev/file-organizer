@@ -1,0 +1,35 @@
+{
+  "name": "file-organizer",
+  "version": "1.0.0",
+  "description": "A Node.js tool to organize files by extension and extract archives automatically",
+  "main": "index.js",
+  "bin": {
+    "file-organizer": "./cli.js"
+  },
+  "scripts": {
+    "start": "node cli.js",
+    "interactive": "node interactiveCli.js",
+    "test": "node test.js",
+    "demo": "node demo.js",
+    "config": "node cli.js --config",
+    "presets": "node cli.js --presets",
+    "test-smart": "node cli.js ./test_files --dry-run -v",
+    "test-preset": "node cli.js ./test_files -p media-focused --dry-run"
+  },
+  "keywords": [
+    "file-organizer",
+    "file-management",
+    "archive-extraction",
+    "automation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^11.0.0",
+    "fs-extra": "^11.1.1",
+    "inquirer": "^8.2.6",
+    "node-7z": "^3.0.0",
+    "yauzl": "^2.10.0"
+  }
+}
