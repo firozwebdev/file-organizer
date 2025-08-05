@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { Command } = require("commander");
-const SmartFileOrganizer = require("./smartFileOrganizer");
+const FileOrganizer = require("./fileOrganizer");
 const ConfigManager = require("./configManager");
 const chalk = require("chalk");
 const path = require("path");
@@ -209,10 +209,11 @@ program
       if (!options.smart) config.organization.useSmartCategories = false;
 
       // Create organizer instance
-      const organizer = new SmartFileOrganizer({
-        outputPath: resolvedOutputDir,
-        config: config,
+      const organizer = new FileOrganizer({
+        outputDir: path.basename(resolvedOutputDir),
+        extractArchives: options.extract !== false,
         dryRun: options.dryRun,
+        logLevel: options.verbose ? 'debug' : options.quiet ? 'error' : 'info'
       });
 
       // Display configuration

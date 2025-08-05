@@ -29,6 +29,12 @@ class FileOrganizer {
       this.logger.enableFileLogging(this.options.logFile);
     }
 
+    // Define allowed file types (folder names will be lowercase extensions)
+    this.allowedFileTypes = [
+      'jpeg', 'jpg', 'png', 'eps', 'ai', 'psd',
+      'pdf', 'crw', 'zip', 'rar', 'svg', 'cdr'
+    ];
+
     this.stats = {
       filesProcessed: 0,
       foldersCreated: 0,
@@ -36,6 +42,7 @@ class FileOrganizer {
       errors: 0,
       totalSize: 0,
       startTime: Date.now(),
+      skippedFiles: 0,
     };
   }
 
@@ -63,19 +70,130 @@ class FileOrganizer {
     return ext.startsWith(".") ? ext.slice(1) : ext || "no-extension";
   }
 
+  isAllowedFileType(extension) {
+    return this.allowedFileTypes.includes(extension.toLowerCase());
+  }
+
+  getFolderNameForExtension(extension) {
+    // Folder name is just the lowercase extension
+    return extension.toLowerCase();
+  }
+
+  sanitizeFileName(fileName) {
+    // Remove invalid characters and normalize the filename
+    return fileName.replace(/[<>:"/\\|?*]/g, '_').trim();
+  }
+
+  async countFilesInDirectory(dirPath) {
+    let count = 0;
+    try {
+      const items = await fs.readdir(dirPath);
+      for (const item of items) {
+        const itemPath = path.join(dirPath, item);
+        const stat = await fs.stat(itemPath);
+        if (stat.isDirectory()) {
+          count += await this.countFilesInDirectory(itemPath);
+        } else {
+          count++;
+        }
+      }
+    } catch (error) {
+      // Ignore errors for inaccessible directories
+    }
+    return count;
+  }
+
+  async detectFileType(filePath) {
+    try {
+      // Read the first few bytes to detect file signature
+      const buffer = Buffer.alloc(16);
+      const fd = await fs.open(filePath, 'r');
+      await fs.read(fd, buffer, 0, 16, 0);
+      await fs.close(fd);
+
+      // File signatures (magic numbers)
+      const signatures = {
+        'jpg': [0xFF, 0xD8, 0xFF],
+        'jpeg': [0xFF, 0xD8, 0xFF],
+        'png': [0x89, 0x50, 0x4E, 0x47],
+        'pdf': [0x25, 0x50, 0x44, 0x46],
+        'zip': [0x50, 0x4B, 0x03, 0x04],
+        'rar': [0x52, 0x61, 0x72, 0x21],
+        'eps': [0x25, 0x21, 0x50, 0x53], // %!PS
+        'psd': [0x38, 0x42, 0x50, 0x53], // 8BPS
+      };
+
+      // Check file signatures
+      for (const [type, signature] of Object.entries(signatures)) {
+        if (signature.every((byte, index) => buffer[index] === byte)) {
+          return type;
+        }
+      }
+
+      // Fall back to extension-based detection
+      return this.getFileExtension(filePath);
+    } catch (error) {
+      this.log("debug", `Could not detect file type for ${filePath}, using extension`);
+      return this.getFileExtension(filePath);
+    }
+  }
+
+  async getCorrectFileExtension(filePath) {
+    const detectedType = await this.detectFileType(filePath);
+    const currentExtension = this.getFileExtension(filePath);
+
+    // If detected type differs from extension and both are supported, use detected type
+    if (detectedType !== currentExtension &&
+        this.isAllowedFileType(detectedType) &&
+        this.isAllowedFileType(currentExtension)) {
+      this.log("info", `File type mismatch detected: ${filePath} appears to be .${detectedType} but has .${currentExtension} extension`);
+      return detectedType;
+    }
+
+    return currentExtension;
+  }
+
   async copyFileToOrganizedLocation(filePath, basePath) {
     try {
-      const extension = this.getFileExtension(filePath);
-      const fileName = path.basename(filePath);
-      const targetDir = path.join(basePath, this.options.outputDir, extension);
-      const targetPath = path.join(targetDir, fileName);
+      // First detect the actual file type by signature
+      const detectedType = await this.detectFileType(filePath);
+      const currentExtension = this.getFileExtension(filePath);
+
+      // Use detected type if it's supported, otherwise fall back to extension
+      let correctExtension = detectedType;
+      if (!this.isAllowedFileType(detectedType)) {
+        correctExtension = currentExtension;
+      }
+
+      // Check if this file type is allowed
+      if (!this.isAllowedFileType(correctExtension)) {
+        this.log("debug", `Skipping file with unsupported type: ${filePath} (.${correctExtension})`);
+        this.stats.skippedFiles++;
+        return null;
+      }
+
+      const folderName = this.getFolderNameForExtension(correctExtension);
+      const originalFileName = path.basename(filePath);
+
+      // Create a proper filename with correct extension if needed
+      let finalFileName = this.sanitizeFileName(originalFileName);
+
+      if (correctExtension !== currentExtension) {
+        // File type was corrected, update the filename extension
+        const nameWithoutExt = path.parse(originalFileName).name;
+        finalFileName = this.sanitizeFileName(`${nameWithoutExt}.${correctExtension}`);
+        this.log("info", `Correcting file extension: ${originalFileName} -> ${finalFileName}`);
+      }
+
+      const targetDir = path.join(basePath, this.options.outputDir, folderName);
+      const targetPath = path.join(targetDir, finalFileName);
 
       // Handle duplicate filenames
       let finalTargetPath = targetPath;
       let counter = 1;
       while (await fs.pathExists(finalTargetPath)) {
-        const nameWithoutExt = path.parse(fileName).name;
-        const ext = path.parse(fileName).ext;
+        const nameWithoutExt = path.parse(finalFileName).name;
+        const ext = path.parse(finalFileName).ext;
         finalTargetPath = path.join(
           targetDir,
           `${nameWithoutExt}_${counter}${ext}`
@@ -92,13 +210,13 @@ class FileOrganizer {
         "info",
         `${
           this.options.dryRun ? "[DRY RUN] " : ""
-        }Copied: ${filePath} -> ${finalTargetPath}`
+        }Organized: ${filePath} -> ${finalTargetPath}`
       );
       this.stats.filesProcessed++;
 
       return finalTargetPath;
     } catch (error) {
-      this.log("error", `Failed to copy file ${filePath}:`, error.message);
+      this.log("error", `Failed to organize file ${filePath}:`, error.message);
       this.stats.errors++;
       return null;
     }
@@ -139,29 +257,39 @@ class FileOrganizer {
   }
 
   isArchiveFile(extension) {
-    const archiveExtensions = ["zip", "rar", "7z", "tar", "gz", "bz2", "xz"];
-    return archiveExtensions.includes(extension);
+    // Only handle ZIP and RAR files as specified in requirements
+    const archiveExtensions = ["zip", "rar"];
+    return archiveExtensions.includes(extension.toLowerCase());
   }
 
   async handleArchiveFile(archivePath, basePath) {
     this.log("info", `Found archive: ${archivePath}`);
 
     try {
-      // First, copy the archive file itself
-      await this.copyFileToOrganizedLocation(archivePath, basePath);
-
-      // Then extract and organize its contents
+      // Extract the archive first and organize its contents
       const extractedPath = await this.extractArchive(archivePath, basePath);
       if (extractedPath) {
-        this.log("info", `Extracted archive to: ${extractedPath}`);
+        this.log("info", `Successfully extracted archive to: ${extractedPath}`);
+
+        // Recursively scan and organize all extracted contents
         await this.scanDirectory(extractedPath, basePath);
+
+        // Count extracted files
+        const extractedCount = await this.countFilesInDirectory(extractedPath);
+        this.log("info", `Organized ${extractedCount} files from archive: ${path.basename(archivePath)}`);
 
         // Clean up extracted directory after organizing
         if (!this.options.dryRun && this.options.cleanupExtracted !== false) {
           await fs.remove(extractedPath);
           this.log("debug", `Cleaned up extracted directory: ${extractedPath}`);
         }
+      } else {
+        this.log("warn", `Failed to extract archive: ${archivePath}`);
       }
+
+      // Then copy the archive file itself to the appropriate folder
+      await this.copyFileToOrganizedLocation(archivePath, basePath);
+
     } catch (error) {
       this.log(
         "error",
@@ -169,6 +297,13 @@ class FileOrganizer {
         error.message
       );
       this.stats.errors++;
+
+      // Still try to copy the archive file even if extraction failed
+      try {
+        await this.copyFileToOrganizedLocation(archivePath, basePath);
+      } catch (copyError) {
+        this.log("error", `Failed to copy archive file: ${copyError.message}`);
+      }
     }
   }
 
@@ -208,49 +343,95 @@ class FileOrganizer {
 
     return new Promise((resolve, reject) => {
       yauzl.open(zipPath, { lazyEntries: true }, (err, zipfile) => {
-        if (err) return reject(err);
+        if (err) {
+          this.log("error", `Failed to open ZIP file ${zipPath}: ${err.message}`);
+          return reject(err);
+        }
 
+        let extractedFiles = 0;
         zipfile.readEntry();
+
         zipfile.on("entry", async (entry) => {
-          if (/\/$/.test(entry.fileName)) {
-            // Directory entry
-            await fs.ensureDir(path.join(extractDir, entry.fileName));
-            zipfile.readEntry();
-          } else {
-            // File entry
-            zipfile.openReadStream(entry, async (err, readStream) => {
-              if (err) return reject(err);
+          try {
+            if (/\/$/.test(entry.fileName)) {
+              // Directory entry
+              await fs.ensureDir(path.join(extractDir, entry.fileName));
+              zipfile.readEntry();
+            } else {
+              // File entry
+              zipfile.openReadStream(entry, async (err, readStream) => {
+                if (err) {
+                  this.log("warn", `Failed to read entry ${entry.fileName}: ${err.message}`);
+                  zipfile.readEntry();
+                  return;
+                }
 
-              const filePath = path.join(extractDir, entry.fileName);
-              await fs.ensureDir(path.dirname(filePath));
+                const filePath = path.join(extractDir, entry.fileName);
+                await fs.ensureDir(path.dirname(filePath));
 
-              const writeStream = fs.createWriteStream(filePath);
-              readStream.pipe(writeStream);
+                const writeStream = fs.createWriteStream(filePath);
+                readStream.pipe(writeStream);
 
-              writeStream.on("close", () => {
-                zipfile.readEntry();
+                writeStream.on("close", () => {
+                  extractedFiles++;
+                  this.log("debug", `Extracted: ${entry.fileName}`);
+                  zipfile.readEntry();
+                });
+
+                writeStream.on("error", (err) => {
+                  this.log("warn", `Failed to write ${entry.fileName}: ${err.message}`);
+                  zipfile.readEntry();
+                });
               });
-            });
+            }
+          } catch (error) {
+            this.log("warn", `Error processing entry ${entry.fileName}: ${error.message}`);
+            zipfile.readEntry();
           }
         });
 
-        zipfile.on("end", () => resolve());
-        zipfile.on("error", reject);
+        zipfile.on("end", () => {
+          this.log("info", `ZIP extraction complete: ${extractedFiles} files extracted from ${path.basename(zipPath)}`);
+          resolve();
+        });
+
+        zipfile.on("error", (err) => {
+          this.log("error", `ZIP extraction error: ${err.message}`);
+          reject(err);
+        });
       });
     });
   }
 
   async extract7z(archivePath, extractDir) {
-    const node7z = require("node-7z");
+    try {
+      const node7z = require("node-7z");
 
-    return new Promise((resolve, reject) => {
-      const extractStream = node7z.extractFull(archivePath, extractDir, {
-        $progress: true,
+      return new Promise((resolve, reject) => {
+        this.log("debug", `Starting 7z extraction: ${path.basename(archivePath)}`);
+
+        const extractStream = node7z.extractFull(archivePath, extractDir, {
+          $progress: true,
+        });
+
+        extractStream.on("data", (data) => {
+          this.log("debug", `7z progress: ${data.file}`);
+        });
+
+        extractStream.on("end", () => {
+          this.log("info", `7z extraction complete: ${path.basename(archivePath)}`);
+          resolve();
+        });
+
+        extractStream.on("error", (err) => {
+          this.log("error", `7z extraction failed for ${path.basename(archivePath)}: ${err.message}`);
+          reject(err);
+        });
       });
-
-      extractStream.on("end", () => resolve());
-      extractStream.on("error", reject);
-    });
+    } catch (error) {
+      this.log("error", `7z module not available or failed to load: ${error.message}`);
+      throw error;
+    }
   }
 
   async organizeDirectories(directories) {
@@ -275,7 +456,13 @@ class FileOrganizer {
     this.log("info", chalk.green("\n=== Organization Complete ==="));
     this.log("info", `Files processed: ${this.stats.filesProcessed}`);
     this.log("info", `Archives extracted: ${this.stats.archivesExtracted}`);
+    this.log("info", `Files skipped (unsupported types): ${this.stats.skippedFiles}`);
     this.log("info", `Errors: ${this.stats.errors}`);
+
+    // Show allowed file types
+    this.log("info", chalk.cyan("\nSupported file types:"));
+    const supportedTypes = this.allowedFileTypes.map(ext => `.${ext.toUpperCase()}`).join(', ');
+    this.log("info", supportedTypes);
 
     if (this.options.dryRun) {
       this.log(
